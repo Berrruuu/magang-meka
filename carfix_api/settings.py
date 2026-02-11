@@ -42,7 +42,8 @@ INSTALLED_APPS = [
     'django.contrib.postgres',
     'rest_framework',
     'kpi',
-    'rest_framework_simplejwt.token_blacklist',
+    'drf_yasg',
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -83,7 +84,7 @@ DATABASES = {
          'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'carfix_api',
         'USER': 'postgres',
-        'PASSWORD': 'berru001',  # ganti sesuai punyamu
+        'PASSWORD': 'berru001',  
         'HOST': 'localhost',
         'PORT': '5432',
     },
@@ -139,6 +140,7 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 SIMPLE_JWT = {
@@ -147,11 +149,24 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-DATABASE_ROUTERS = ['kpi.db_router.UserRouter']
+DATABASE_ROUTERS = ['kpi.db_router.CarfixRouter']
+
 
 AUTH_USER_MODEL = 'kpi.User'
+
 
 AUTHENTICATION_BACKENDS = [
     'django.contrib.auth.backends.ModelBackend',
 ]
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'Masukkan token dengan format: Bearer <access_token>'
+        }
+    },
+}
 

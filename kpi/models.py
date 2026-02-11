@@ -18,7 +18,11 @@ class Company(models.Model):
 
 
 class KpiTarget(models.Model):
-    company = models.ForeignKey(Company, on_delete=models.CASCADE, db_column="company_id")
+    company = models.ForeignKey(
+        Company,
+        on_delete=models.CASCADE,
+        db_column="company_id"
+    )
     kpi = models.CharField(max_length=100)
     tahun = models.IntegerField()
 
@@ -38,8 +42,13 @@ class KpiTarget(models.Model):
     setahun = models.DecimalField(max_digits=25, decimal_places=2, default=0)
     note = models.TextField(blank=True, null=True)
 
+    class Meta:
+        db_table = "kpi_target"
+        managed = False   
+
     def __str__(self):
-        return f"{self.kpi} - {self.company.name} - {self.tahun}"
+        return f"{self.kpi} - {self.company_id} - {self.tahun}"
+
     
 
 
@@ -58,13 +67,14 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         return self.create_user(email, password, **extra_fields)
+    
 
 
 class User(AbstractBaseUser, PermissionsMixin):
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
     role = models.CharField(max_length=50)
-    company = ArrayField(models.IntegerField())
+    company = models.JSONField(default=list)
     status = models.BooleanField(default=True)
 
     is_staff = models.BooleanField(default=False)
@@ -79,7 +89,17 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     class Meta:
         db_table = "users"
-        managed = False  
+        managed = False
 
     def __str__(self):
         return self.email
+
+
+class CompanyUser(models.Model):
+    user_id = models.IntegerField()
+    company_id = models.IntegerField()
+
+    class Meta:
+        db_table = 'company_user'
+        managed = False
+        unique_together = ('user_id', 'company_id')

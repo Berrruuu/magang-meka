@@ -2,16 +2,17 @@ from rest_framework import serializers
 from .models import Company, KpiTarget, User
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import make_password
-from .models import User, Company
+from .models import User, Company, CompanyUser
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.exceptions import AuthenticationFailed
+from .utils.response import success_response, error_response
 
 
 
 class CompanySerializer(serializers.ModelSerializer):
     class Meta:
         model = Company
-        fields = '__all__'
+        fields = ['id', 'name']
 
 
 class KpiTargetSerializer(serializers.ModelSerializer):
@@ -21,24 +22,37 @@ class KpiTargetSerializer(serializers.ModelSerializer):
 
 
 
-class RegisterSerializer(serializers.ModelSerializer):
+class RegisterSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
-
-    class Meta:
-        model = User
-        fields = [
-            'id',
-            'name',
-            'email',
-            'password',
-            'role',
-            'company',
-            'status'
-        ]
+    role = serializers.CharField()
+    status = serializers.BooleanField()
+    company_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True
+    )
 
     def create(self, validated_data):
-        validated_data['password'] = make_password(validated_data['password'])
-        return User.objects.create(**validated_data)
+        company_ids = validated_data.pop('company_ids')
+
+        user = User.objects.create_user(**validated_data)
+
+        for cid in company_ids:
+            CompanyUser.objects.create(
+                user_id=user.id,
+                company_id=cid
+            )
+
+        companies = Company.objects.using('default').filter(
+            id__in=company_ids
+        ).values('id', 'name')
+
+        user.company = list(companies)
+        user.save()
+
+        return user
+    
     
 
 
@@ -49,11 +63,18 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
-
         token['name'] = user.name
         token['email'] = user.email
         token['role'] = user.role
-        token['company'] = user.company
+
+        company_ids = list(
+            CompanyUser.objects
+            .using('carfix_user')
+            .filter(user_id=user.id)
+            .values_list('company_id', flat=True)
+        )
+
+        token['company'] = company_ids
 
         return token
 
@@ -63,7 +84,20 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not self.user.status:
             raise AuthenticationFailed("Akun tidak aktif")
 
-        companies = Company.objects.filter(id__in=self.user.company)
+
+        company_ids = list(
+            CompanyUser.objects
+            .using('carfix_user')
+            .filter(user_id=self.user.id)
+            .values_list('company_id', flat=True)
+        )
+
+        companies = Company.objects.using('default').filter(
+            id__in=company_ids
+        )
+
+
+        data['access_company_ids'] = company_ids
 
         data['user'] = {
             "id": self.user.id,
@@ -79,16 +113,29 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             ]
         }
 
-        return data
+        return data  
+
 
 class UserSerializer(serializers.ModelSerializer):
+    companies = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = [
-            "id",
-            "name",
-            "email",
-            "role",
-            "company",
-            "status"
-        ]
+        fields = ['id', 'name', 'email', 'role', 'status', 'companies']
+
+    def get_companies(self, obj):
+        company_ids = list(
+            CompanyUser.objects
+            .using('carfix_user')
+            .filter(user_id=obj.id)
+            .values_list('company_id', flat=True)
+        )
+
+        if not company_ids:
+            return []
+
+        companies = Company.objects.using('default').filter(
+            id__in=company_ids
+        ).values('id', 'name')
+
+        return list(companies)
