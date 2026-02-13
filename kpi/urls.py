@@ -2,8 +2,9 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import *
 router = DefaultRouter()
-router.register(r'company', CompanyViewSet, basename='company')
+router.register(r'compan', CompanyViewSet, basename='company')
 router.register(r'kpi-targets', KpiTargetViewSet, basename='kpi-target')
+
 
 
 urlpatterns = [
@@ -14,7 +15,9 @@ urlpatterns = [
     path('users/<int:user_id>/companies', UserCompaniesView.as_view()),
     path('logout/', LogoutView.as_view()),
     path('users/<int:pk>/', UserDetailView.as_view(), name='user-detail'),
-    path("companies/<int:company_id>/kpis/",CompanyKpiView.as_view(),name="company-kpis"),
+    path('companies/<int:company_id>/kpis/',CompanyKpiView.as_view(),name='company-kpis'),
+    path('companies/<int:company_id>/kpis/<str:kpi>/',CompanyKpiByTypeView.as_view(),name='company-kpi-by-type'),
+
 
 
 

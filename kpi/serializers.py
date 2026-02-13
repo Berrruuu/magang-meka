@@ -6,7 +6,7 @@ from .models import User, Company, CompanyUser
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework.exceptions import AuthenticationFailed
 from .utils.response import success_response, error_response
-
+from django.db import transaction
 
 
 class CompanySerializer(serializers.ModelSerializer):
@@ -118,24 +118,56 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     companies = serializers.SerializerMethodField()
+    company_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
 
     class Meta:
         model = User
-        fields = ['id', 'name', 'email', 'role', 'status', 'companies']
+        fields = ['id', 'name', 'email', 'role', 'status', 'companies', 'company_ids']
 
     def get_companies(self, obj):
-        company_ids = list(
-            CompanyUser.objects
-            .using('carfix_user')
-            .filter(user_id=obj.id)
-            .values_list('company_id', flat=True)
-        )
+        return obj.company or []
 
-        if not company_ids:
-            return []
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        company_ids = validated_data.pop('company_ids', None)
 
-        companies = Company.objects.using('default').filter(
-            id__in=company_ids
-        ).values('id', 'name')
+        # 1️⃣ Update field biasa
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
 
-        return list(companies)
+        instance.save(using='carfix_user')
+
+        # 2️⃣ Kalau ada update company
+        if company_ids is not None:
+
+            # Validasi company ada di DB default
+            valid_companies = list(
+                Company.objects.using('default')
+                .filter(id__in=company_ids)
+                .values('id', 'name')
+            )
+
+            if len(valid_companies) != len(company_ids):
+                raise serializers.ValidationError(
+                    "Salah satu company tidak ditemukan."
+                )
+
+            # 3️⃣ Update pivot table (source of truth)
+            CompanyUser.objects.using('carfix_user').filter(
+                user_id=instance.id
+            ).delete()
+
+            CompanyUser.objects.using('carfix_user').bulk_create([
+                CompanyUser(user_id=instance.id, company_id=cid)
+                for cid in company_ids
+            ])
+
+            # 4️⃣ Sync JSON snapshot
+            instance.company = valid_companies
+            instance.save(using='carfix_user')
+
+        return instance
