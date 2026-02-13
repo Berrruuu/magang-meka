@@ -103,3 +103,36 @@ class CompanyUser(models.Model):
         db_table = 'company_user'
         managed = False
         unique_together = ('user_id', 'company_id')
+
+
+class KpiTarget(models.Model):
+    KPI_CHOICES = (
+        ('vpt', 'VPT'),
+        ('unit-entry', 'Unit Entry'),
+        ('revenue-all', 'Revenue All'),
+    )
+
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='kpis')
+    kpi = models.CharField(max_length=100)
+    tahun = models.IntegerField()
+
+    jan_01 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    feb_02 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    mar_03 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    apr_04 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    may_05 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    jun_06 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    jul_07 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    aug_08 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    sep_09 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    oct_10 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    nov_11 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    des_12 = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    setahun = models.DecimalField(max_digits=25, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = "kpi_target"
+        managed = False
+
+    def __str__(self):
+        return f"{self.company.name} - {self.kpi}"

@@ -24,6 +24,13 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.decorators import action
 from rest_framework.exceptions import AuthenticationFailed
 from datetime import datetime
+from rest_framework.exceptions import PermissionDenied
+from django.shortcuts import get_object_or_404
+from rest_framework.generics import UpdateAPIView
+from rest_framework.generics import RetrieveUpdateDestroyAPIView
+from rest_framework.generics import RetrieveUpdateAPIView
+from calendar import monthrange
+from decimal import Decimal
 
 
 
@@ -256,21 +263,112 @@ class LogoutView(APIView):
             status_code=status.HTTP_200_OK
         )
 
-class UserDetailView(RetrieveAPIView):
+class UserDetailView(RetrieveUpdateDestroyAPIView):
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated]
+    lookup_field = "pk"
 
     def get_object(self):
-        return self.request.user 
+        return get_object_or_404(User, pk=self.kwargs.get("pk"))
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        return success_response(
+            data=self.get_serializer(instance).data,
+            message="Detail user berhasil diambil"
+        )
+
+    def update(self, request, *args, **kwargs):
+        if request.user.role != "admin":
+            raise PermissionDenied("Hanya admin yang dapat mengedit user.")
+
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return success_response(
+            data=serializer.data,
+            message="User berhasil diperbarui"
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        if request.user.role != "admin":
+            raise PermissionDenied("Hanya admin yang dapat menghapus user.")
+
+        instance = self.get_object()
+        instance.delete()
+
+        return success_response(
+            data=None,
+            message="User berhasil dihapus"
+        )
 
 
 class CompanyKpiView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, company_id):
-        month = datetime.now().month
-
+    def get_dummy_invoice_lines(self, company_id):
         
+        return [
+            # invoice masuk
+            {"company_id": company_id, "type": "out_invoice", "price_subtotal": 500000},
+            {"company_id": company_id, "type": "out_invoice", "price_subtotal": 700000},
+            {"company_id": company_id, "type": "out_invoice", "price_subtotal": 300000},
+
+            # refund
+            {"company_id": company_id, "type": "out_refund", "price_subtotal": 200000},
+        ]
+
+    def calculate_all_kpi(self, company_id):
+
+        lines = self.get_dummy_invoice_lines(company_id)
+
+        # UE
+        ue_masuk = sum(1 for l in lines if l["type"] == "out_invoice")
+        ue_retur = sum(1 for l in lines if l["type"] == "out_refund")
+        unit_entry = Decimal(ue_masuk - ue_retur)
+
+        # RA
+        revenue_in = sum(
+            Decimal(str(l["price_subtotal"])) for l in lines
+            if l["type"] == "out_invoice"
+        )
+
+        revenue_out = sum(
+            Decimal(str(l["price_subtotal"])) for l in lines
+            if l["type"] == "out_refund"
+        )
+
+        revenue_total = revenue_in - revenue_out
+
+        # VPT
+        if unit_entry == 0:
+            vpt = Decimal("0")
+        else:
+            vpt = revenue_total / unit_entry
+
+        return {
+            "UNIT ENTRY": unit_entry,
+            "REVENUE ALL": revenue_total,
+            "VPT": vpt
+        }
+
+
+    def get(self, request, company_id):
+
+        now = datetime.now()
+        current_month = now.month
+        current_day = now.day
+        total_days = monthrange(now.year, now.month)[1]
+
         month_map = {
             1: "jan_01",
             2: "feb_02",
@@ -286,7 +384,7 @@ class CompanyKpiView(APIView):
             12: "des_12",
         }
 
-        month_column = month_map[month]
+        month_column = month_map[current_month]
 
         with connections['default'].cursor() as cursor:
             cursor.execute(f"""
@@ -294,12 +392,7 @@ class CompanyKpiView(APIView):
                     kt.id,
                     kt.kpi,
                     kt.{month_column} as target_month,
-                    kt.setahun as target_year,
-                    
-                    /* contoh achievement dummy */
-                    123456789 as achievement_month,
-                    5000 as achievement_year
-                    
+                    kt.setahun as target_year
                 FROM kpi_target kt
                 WHERE kt.company_id = %s
             """, [company_id])
@@ -310,43 +403,155 @@ class CompanyKpiView(APIView):
                 for row in cursor.fetchall()
             ]
 
+        all_kpi = self.calculate_all_kpi(company_id)
 
         final_data = []
+
         for row in results:
-            ratio_month = (
-                row["achievement_month"] / row["target_month"]
-                if row["target_month"] else 0
-            )
 
-            gap_month = row["target_month"] - row["achievement_month"]
+            achievement_month = all_kpi.get(row["kpi"].upper(), 0)
+            achievement_year = achievement_month  
 
-            ratio_year = (
-                row["achievement_year"] / row["target_year"]
-                if row["target_year"] else 0
-            )
+            target_month = row["target_month"] or 0
+            target_year = row["target_year"] or 0
 
-            gap_year = row["target_year"] - row["achievement_year"]
+            ratio_month = (achievement_month / target_month * Decimal("100")) if target_month else Decimal("0")
+            ratio_year = (achievement_year / target_year * Decimal("100")) if target_year else Decimal("0")
+
+            gap_month = achievement_month - target_month
+            gap_year = achievement_year - target_year
+
+            if current_day > 0:
+                estimate = (achievement_month / current_day) * total_days
+            else:
+                estimate = achievement_month
 
             final_data.append({
                 "kpi": row["kpi"],
 
                 "month": {
-                    "achievement": row["achievement_month"],
-                    "target": row["target_month"],
-                    "ratio": round(ratio_month, 2),
-                    "gap": gap_month
+                    "achievement": round(achievement_month, 2),
+                    "target": target_month,
+                    "ratio_percent": round(ratio_month, 2),
+                    "gap": round(gap_month, 2),
+                    "estimate": round(estimate, 2)
                 },
 
                 "year_to_month": {
-                    "achievement": row["achievement_year"],
-                    "target": row["target_year"],
-                    "ratio": round(ratio_year, 2),
-                    "gap": gap_year
+                    "achievement": round(achievement_year, 2),
+                    "target": target_year,
+                    "ratio_percent": round(ratio_year, 2),
+                    "gap": round(gap_year, 2)
                 }
             })
 
-        # pagination
         paginator = DefaultPagination()
         paginated = paginator.paginate_queryset(final_data, request)
 
         return paginator.get_paginated_response(paginated)
+    
+
+class CompanyKpiByTypeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get_dummy_invoice_lines(self, company_id):
+        return [
+            {"company_id": company_id, "type": "out_invoice", "price_subtotal": 500000},
+            {"company_id": company_id, "type": "out_invoice", "price_subtotal": 700000},
+            {"company_id": company_id, "type": "out_invoice", "price_subtotal": 300000},
+            {"company_id": company_id, "type": "out_refund", "price_subtotal": 200000},
+        ]
+
+    def calculate_all_kpi(self, company_id):
+        lines = self.get_dummy_invoice_lines(company_id)
+
+        ue_masuk = sum(1 for l in lines if l["type"] == "out_invoice")
+        ue_retur = sum(1 for l in lines if l["type"] == "out_refund")
+        unit_entry = Decimal(ue_masuk - ue_retur)
+
+        revenue_in = sum(
+            Decimal(str(l["price_subtotal"]))
+            for l in lines if l["type"] == "out_invoice"
+        )
+
+        revenue_out = sum(
+            Decimal(str(l["price_subtotal"]))
+            for l in lines if l["type"] == "out_refund"
+        )
+
+        revenue_total = revenue_in - revenue_out
+
+        vpt = revenue_total / unit_entry if unit_entry else Decimal("0")
+
+        return {
+            "UNIT ENTRY": unit_entry,
+            "REVENUE ALL": revenue_total,
+            "VPT": vpt
+        }
+
+    def get(self, request, company_id, kpi):
+
+        now = datetime.now()
+        current_month = now.month
+        current_day = now.day
+        total_days = monthrange(now.year, now.month)[1]
+
+        month_map = {
+            1: "jan_01", 2: "feb_02", 3: "mar_03", 4: "apr_04",
+            5: "may_05", 6: "jun_06", 7: "jul_07", 8: "aug_08",
+            9: "sep_09", 10: "oct_10", 11: "nov_11", 12: "des_12",
+        }
+
+        month_column = month_map[current_month]
+
+        kpi_obj = KpiTarget.objects.filter(
+            company_id=company_id,
+            kpi__iexact=kpi
+        ).first()
+
+        if not kpi_obj:
+            return Response(
+                {"error": "KPI not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        all_kpi = self.calculate_all_kpi(company_id)
+
+        achievement_month = all_kpi.get(kpi_obj.kpi.upper(), Decimal("0"))
+        achievement_year = achievement_month
+
+        target_month = getattr(kpi_obj, month_column) or Decimal("0")
+        target_year = kpi_obj.setahun or Decimal("0")
+
+        ratio_month = (achievement_month / target_month * Decimal("100")) if target_month else Decimal("0")
+        ratio_year = (achievement_year / target_year * Decimal("100")) if target_year else Decimal("0")
+
+        gap_month = achievement_month - target_month
+        gap_year = achievement_year - target_year
+
+        estimate = (
+            (achievement_month / current_day) * total_days
+            if current_day else achievement_month
+        )
+
+        data = {
+            "company_id": company_id,
+            "kpi": kpi_obj.kpi,
+
+            "month": {
+                "achievement": round(achievement_month, 2),
+                "target": target_month,
+                "ratio_percent": round(ratio_month, 2),
+                "gap": round(gap_month, 2),
+                "estimate": round(estimate, 2)
+            },
+
+            "year_to_month": {
+                "achievement": round(achievement_year, 2),
+                "target": target_year,
+                "ratio_percent": round(ratio_year, 2),
+                "gap": round(gap_year, 2)
+            }
+        }
+
+        return Response(data)
